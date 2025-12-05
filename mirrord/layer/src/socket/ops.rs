@@ -230,12 +230,14 @@ fn is_ignored_tcp_port(addr: &SocketAddr, config: &IncomingConfig) -> bool {
     // This is a bit weird, but it makes more sense configured ports are the remote port
     // and not the local, so the check is done on the mapped port
     // see https://github.com/metalbear-co/mirrord/issues/2397
+    //
+    // PortList.contains() handles both wildcard All and specific ports
     let not_a_filtered_port = config
         .http_filter
         .ports
         .as_ref()
-        .is_some_and(|filter_ports| filter_ports.contains(&mapped_port))
-        .not();
+        .map(|port_list| !port_list.contains(&mapped_port))
+        .unwrap_or(true);
 
     let not_stolen_with_filter = !http_filter_used || not_a_filtered_port;
 
@@ -402,6 +404,16 @@ fn warn_on_suspected_unintentional_ignore(sockfd: RawFd) {
     let incoming_config = crate::setup().incoming_config();
     let http_filter_used =
         incoming_config.mode == IncomingMode::Steal && incoming_config.http_filter.is_filter_set();
+
+    // No warning needed if ports is wildcard "*" - all ports are filtered
+    if incoming_config
+        .http_filter
+        .ports
+        .as_ref()
+        .is_some_and(|p| p.is_all())
+    {
+        return;
+    }
 
     // User specified a filter that does not include this port, and did not specify any
     // unfiltered ports?

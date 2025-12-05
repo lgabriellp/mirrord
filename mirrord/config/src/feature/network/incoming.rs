@@ -542,10 +542,22 @@ impl IncomingConfig {
     /// avoid overriding their config. We also take care to not create conflicts with other
     /// port configs that we have, such as [`IncomingConfig::ignore_ports`]`, and
     /// [`IncomingConfig::ports`].
+    ///
+    /// If ports is set to wildcard `"*"`, we also do nothing since all ports are already covered.
     pub fn add_probe_ports_to_http_filter_ports(
         &mut self,
         probes_ports: &[u16],
     ) -> Option<&PortList> {
+        // When ports is wildcard "*", we don't need to populate - all ports are covered
+        if self
+            .http_filter
+            .ports
+            .as_ref()
+            .is_some_and(|p| p.is_all())
+        {
+            return self.http_filter.ports.as_ref();
+        }
+
         if self.is_steal() && self.http_filter.is_filter_set() && self.http_filter.ports.is_none() {
             let filtered_ports = probes_ports
                 .iter()
@@ -934,13 +946,7 @@ mod test {
     ) {
         config.add_probe_ports_to_http_filter_ports(&[port]);
 
-        // Sort the ports since `HashSet` does not guarantee order.
-        if let Some(http_filter_ports) = config.http_filter.ports.as_mut() {
-            let mut ports_vec: Vec<u16> = http_filter_ports.clone().into();
-            ports_vec.sort();
-            *http_filter_ports = ports_vec.into();
-        }
-
+        // Compare the sets directly since HashSet comparison is order-independent
         assert_eq!(config, expected);
     }
 }

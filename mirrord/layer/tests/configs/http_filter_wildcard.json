@@ -1,0 +1,13 @@
+{
+  "feature": {
+    "network": {
+      "incoming": {
+        "mode": "steal",
+        "http_filter": {
+          "ports": ["*"],
+          "header_filter": "x-test: yes"
+        }
+      }
+    }
+  }
+}

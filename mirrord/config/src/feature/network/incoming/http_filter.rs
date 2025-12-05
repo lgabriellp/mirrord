@@ -1,9 +1,4 @@
-use std::{
-    collections::HashSet,
-    ops::{Deref, Not},
-    str::FromStr,
-    sync::LazyLock,
-};
+use std::{collections::HashSet, ops::Not, str::FromStr, sync::LazyLock};
 
 use mirrord_analytics::CollectAnalytics;
 use mirrord_config_derive::MirrordConfig;
@@ -16,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{ConfigContext, ConfigError, from_env::FromEnv, source::MirrordConfigSource},
-    util::{MirrordToggleableConfig, VecOrSingle},
+    util::MirrordToggleableConfig,
 };
 
 /// Filter configuration for the HTTP traffic stealer feature.
@@ -177,6 +172,13 @@ pub struct HttpFilterConfig {
     ///
     /// Activate the HTTP traffic filter only for these ports.
     ///
+    /// Accepts:
+    /// - A list of port numbers: `[80, 8080, 3000]`
+    /// - Wildcard for all ports: `["*"]`
+    ///
+    /// When set to `["*"]`, the HTTP filter applies to ALL ports the application
+    /// listens on, which is useful for services on non-standard ports.
+    ///
     /// Other ports will *not* be stolen, unless listed in
     /// [`feature.network.incoming.ports`](#feature-network-incoming-ports).
     ///
@@ -184,7 +186,7 @@ pub struct HttpFilterConfig {
     /// usually the same ports your app might be listening on. If your app ports and the
     /// health probe ports don't match, then setting this option will override this behavior.
     ///
-    /// Set to [80, 8080] by default.
+    /// Defaults to `[80, 8080]` when not specified.
     #[config(env = "MIRRORD_HTTP_FILTER_PORTS")]
     pub ports: Option<PortList>,
 }
@@ -273,15 +275,6 @@ impl HttpFilterConfig {
             })
     }
 
-    pub fn get_filtered_ports(&self) -> Option<&[u16]> {
-        if let Some(ports) = self.ports.as_ref()
-            && self.is_filter_set()
-        {
-            Some(&*ports.0)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, JsonSchema, Serialize, Deserialize)]
@@ -425,12 +418,85 @@ pub enum BodyFilter {
 /// Helper struct for setting up ports configuration (part of the HTTP traffic stealer feature).
 ///
 /// Defaults to a list of ports `[80, 8080]`.
+/// Supports wildcard `["*"]` to apply filter to all ports.
 ///
 /// We use this to allow implementing a custom [`Default`] initialization, as the [`MirrordConfig`]
 /// macro (currently) doesn't support more intricate expressions.
-#[derive(PartialEq, Eq, Clone, Debug, JsonSchema, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PortList(VecOrSingle<u16>);
+#[derive(PartialEq, Eq, Clone, Debug, JsonSchema)]
+pub struct PortList {
+    /// If true, the filter applies to all ports (wildcard "*")
+    all: bool,
+    /// Specific ports to filter (ignored if `all` is true)
+    ports: HashSet<u16>,
+}
+
+impl Serialize for PortList {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        if self.all {
+            let mut seq = serializer.serialize_seq(Some(1))?;
+            seq.serialize_element("*")?;
+            seq.end()
+        } else {
+            let mut seq = serializer.serialize_seq(Some(self.ports.len()))?;
+            for port in &self.ports {
+                seq.serialize_element(port)?;
+            }
+            seq.end()
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PortList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, Visitor};
+
+        struct PortListVisitor;
+
+        impl<'de> Visitor<'de> for PortListVisitor {
+            type Value = PortList;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a list of ports like [80, 8080], or [\"*\"] for all ports")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut all = false;
+                let mut ports = HashSet::new();
+
+                while let Some(value) = seq.next_element::<serde_json::Value>()? {
+                    match &value {
+                        serde_json::Value::String(s) if s == "*" => {
+                            all = true;
+                        }
+                        serde_json::Value::Number(n) => {
+                            if let Some(port) = n.as_u64() {
+                                ports.insert(port as u16);
+                            } else {
+                                return Err(de::Error::custom("expected port number"));
+                            }
+                        }
+                        _ => return Err(de::Error::custom("expected port number or \"*\"")),
+                    }
+                }
+
+                Ok(PortList { all, ports })
+            }
+        }
+
+        deserializer.deserialize_seq(PortListVisitor)
+    }
+}
 
 impl MirrordToggleableConfig for HttpFilterFileConfig {
     fn disabled_config(context: &mut ConfigContext) -> Result<Self::Generated, ConfigError> {
@@ -469,64 +535,77 @@ impl MirrordToggleableConfig for HttpFilterFileConfig {
 
 impl Default for PortList {
     fn default() -> Self {
-        Self(VecOrSingle::Multiple(vec![80, 8080]))
+        Self {
+            all: false,
+            ports: HashSet::from([80, 8080]),
+        }
     }
 }
 
-impl Deref for PortList {
-    type Target = VecOrSingle<u16>;
+impl PortList {
+    /// Returns true if this contains the "all ports" wildcard
+    pub fn is_all(&self) -> bool {
+        self.all
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    /// Checks if the port list contains a specific port.
+    /// Returns true if wildcard is present or if the specific port is in the set.
+    pub fn contains(&self, port: &u16) -> bool {
+        self.all || self.ports.contains(port)
+    }
+
+    /// Returns an iterator over the specific ports
+    pub fn iter(&self) -> impl Iterator<Item = &u16> {
+        self.ports.iter()
     }
 }
 
 impl FromStr for PortList {
-    type Err = <VecOrSingle<u16> as FromStr>::Err;
+    type Err = std::num::ParseIntError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse().map(PortList)
-    }
-}
-
-impl From<PortList> for Vec<u16> {
-    fn from(value: PortList) -> Self {
-        value.0.to_vec()
+        // FromStr only handles numeric ports (semicolon separated)
+        // Wildcard ["*"] is only supported via JSON deserialization
+        let mut ports = HashSet::new();
+        for part in s.split(';') {
+            ports.insert(part.parse()?);
+        }
+        Ok(PortList { all: false, ports })
     }
 }
 
 impl From<Vec<u16>> for PortList {
     fn from(value: Vec<u16>) -> Self {
-        PortList(VecOrSingle::Multiple(value))
-    }
-}
-
-impl From<PortList> for HashSet<u16> {
-    fn from(value: PortList) -> Self {
-        value.0.into()
+        PortList {
+            all: false,
+            ports: value.into_iter().collect(),
+        }
     }
 }
 
 impl From<HashSet<u16>> for PortList {
     fn from(value: HashSet<u16>) -> Self {
-        PortList(VecOrSingle::Multiple(Vec::from_iter(value)))
+        PortList { all: false, ports: value }
     }
 }
 
 impl core::fmt::Display for PortList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[")?;
-        let mut first = true;
-        for port in self.iter() {
-            if first {
-                write!(f, "{port}")?;
-                first = false;
-            } else {
-                write!(f, ", {port}")?;
+        if self.all {
+            write!(f, "[*]")
+        } else {
+            write!(f, "[")?;
+            let mut first = true;
+            for p in &self.ports {
+                if first {
+                    write!(f, "{p}")?;
+                    first = false;
+                } else {
+                    write!(f, ", {p}")?;
+                }
             }
+            write!(f, "]")
         }
-        write!(f, "]")?;
-        Ok(())
     }
 }
 
@@ -536,9 +615,93 @@ impl CollectAnalytics for &HttpFilterConfig {
         analytics.add("path_filter", self.path_filter.is_some());
         analytics.add(
             "ports",
-            self.get_filtered_ports()
-                .map(|p| p.len())
+            self.ports
+                .as_ref()
+                .map(|p| if p.all { 0 } else { p.ports.len() })
                 .unwrap_or_default(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_port_list_wildcard_array() {
+        let json = r#"["*"]"#;
+        let port_list: PortList = serde_json::from_str(json).unwrap();
+        assert!(port_list.is_all());
+        assert!(port_list.contains(&80));
+        assert!(port_list.contains(&3000));
+        assert!(port_list.contains(&9999));
+    }
+
+    #[test]
+    fn test_port_list_mixed() {
+        // [123, "*"] - wildcard with specific port
+        let json = r#"[123, "*"]"#;
+        let port_list: PortList = serde_json::from_str(json).unwrap();
+        assert!(port_list.is_all());
+        assert!(port_list.ports.contains(&123));
+    }
+
+    #[test]
+    fn test_port_list_specific_ports() {
+        let json = r#"[80, 8080]"#;
+        let port_list: PortList = serde_json::from_str(json).unwrap();
+        assert!(!port_list.is_all());
+        assert!(port_list.contains(&80));
+        assert!(port_list.contains(&8080));
+        assert!(!port_list.contains(&3000));
+    }
+
+    #[test]
+    fn test_port_list_default() {
+        let port_list = PortList::default();
+        assert!(!port_list.is_all());
+        assert!(port_list.contains(&80));
+        assert!(port_list.contains(&8080));
+        assert!(!port_list.contains(&3000));
+    }
+
+    #[test]
+    fn test_port_list_display() {
+        let port_list = PortList { all: true, ports: HashSet::new() };
+        assert_eq!(format!("{}", port_list), "[*]");
+    }
+
+    #[test]
+    fn test_port_list_from_str() {
+        let port_list: PortList = "80;8080".parse().unwrap();
+        assert!(!port_list.is_all());
+        assert!(port_list.contains(&80));
+        assert!(port_list.contains(&8080));
+    }
+
+    #[test]
+    fn test_port_list_single_port_rejected() {
+        let result: Result<PortList, _> = serde_json::from_str(r#"8080"#);
+        assert!(result.is_err());
+
+        let result: Result<PortList, _> = serde_json::from_str(r#""8080""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_port_list_serialize_roundtrip() {
+        // Wildcard
+        let port_list = PortList { all: true, ports: HashSet::new() };
+        let json = serde_json::to_string(&port_list).unwrap();
+        assert_eq!(json, r#"["*"]"#);
+        let deserialized: PortList = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_all());
+
+        // Specific port
+        let port_list = PortList { all: false, ports: HashSet::from([80]) };
+        let json = serde_json::to_string(&port_list).unwrap();
+        assert_eq!(json, r#"[80]"#);
+        let deserialized: PortList = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.contains(&80));
     }
 }
