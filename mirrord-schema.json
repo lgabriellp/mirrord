@@ -1637,15 +1637,14 @@
         },
         "ports": {
           "title": "feature.network.incoming.http_filter.ports {#feature-network-incoming-http_filter-ports}",
-          "description": "Activate the HTTP traffic filter only for these ports.\n\nOther ports will *not* be stolen, unless listed in [`feature.network.incoming.ports`](#feature-network-incoming-ports).\n\nWe check the pod's health probe ports and automatically add them here, as they're usually the same ports your app might be listening on. If your app ports and the health probe ports don't match, then setting this option will override this behavior.\n\nSet to [80, 8080] by default.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PortList"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "description": "Activate the HTTP traffic filter only for these ports.\n\nAccepts: - A list of port numbers: `[80, 8080, 3000]` - Wildcard for all ports: `[\"*\"]`\n\nWhen set to `[\"*\"]`, the HTTP filter applies to ALL ports the application listens on, which is useful for services on non-standard ports.\n\nOther ports will *not* be stolen, unless listed in [`feature.network.incoming.ports`](#feature-network-incoming-ports).\n\nWe check the pod's health probe ports and automatically add them here, as they're usually the same ports your app might be listening on. If your app ports and the health probe ports don't match, then setting this option will override this behavior.\n\nDefaults to `[80, 8080]` when not specified.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PortItem"
+          }
         }
       },
       "additionalProperties": false
@@ -2346,11 +2345,22 @@
       },
       "additionalProperties": false
     },
-    "PortList": {
-      "description": "<!--${internal}--> Helper struct for setting up ports configuration (part of the HTTP traffic stealer feature).\n\nDefaults to a list of ports `[80, 8080]`.\n\nWe use this to allow implementing a custom [`Default`] initialization, as the [`MirrordConfig`] macro (currently) doesn't support more intricate expressions.",
-      "allOf": [
+    "PortItem": {
+      "description": "Represents a single item in a port list: either a port number or the wildcard \"*\".",
+      "anyOf": [
         {
-          "$ref": "#/definitions/VecOrSingle_for_uint16"
+          "description": "Wildcard \"*\" - matches all ports",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Wildcard"
+            }
+          ]
+        },
+        {
+          "description": "Specific port number",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
         }
       ]
     },
@@ -2700,22 +2710,9 @@
         }
       ]
     },
-    "VecOrSingle_for_uint16": {
-      "anyOf": [
-        {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0.0
-          }
-        }
-      ]
+    "Wildcard": {
+      "type": "string",
+      "const": "*"
     },
     "io.k8s.api.core.v1.ResourceClaim": {
       "description": "ResourceClaim references one entry in PodSpec.ResourceClaims.",

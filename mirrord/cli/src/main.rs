@@ -663,56 +663,13 @@ pub(crate) fn print_config<P>(
     if config.feature.network.incoming.is_steal()
         && config.feature.network.incoming.http_filter.is_filter_set()
     {
-        let filtered_ports = config
-            .feature
-            .network
-            .incoming
-            .http_filter
-            .get_filtered_ports()
-            .unwrap_or_default();
-        let filtered_ports_str = match filtered_ports.len() {
-            0 => None,
-            1 => Some(format!(
-                "port {} (filtered)",
-                filtered_ports.first().unwrap()
-            )),
-            _ => Some(format!("ports {filtered_ports:?} (filtered)")),
-        };
+        use mirrord_config::feature::network::incoming::http_filter::format_stolen_ports_message;
 
-        // since filter ports and `incoming.ports` are not required to be disjoint, let
-        // `unfiltered_ports_str` contain `incoming.ports` - filter ports
-        let unfiltered_ports_str =
-            config
-                .feature
-                .network
-                .incoming
-                .ports
-                .as_ref()
-                .and_then(|ports| {
-                    let filtered = filtered_ports.iter().copied().collect::<HashSet<_>>();
-                    let ports: Vec<&u16> = ports.difference(&filtered).collect();
-                    match ports.len() {
-                        0 => None,
-                        1 => Some(format!("port {} (unfiltered)", ports.first().unwrap())),
-                        _ => Some(format!(
-                            "ports [{}] (unfiltered)",
-                            ports
-                                .iter()
-                                .copied()
-                                .map(|n| n.to_string())
-                                .collect::<Vec<String>>()
-                                .join(", ")
-                        )),
-                    }
-                });
-        let and = if filtered_ports_str.is_some() && unfiltered_ports_str.is_some() {
-            " and "
-        } else {
-            ""
-        };
-        let filtered_port_str = filtered_ports_str.unwrap_or_default();
-        let unfiltered_ports_str = unfiltered_ports_str.unwrap_or_default();
-        progress.info(&format!("incoming: traffic will only be stolen from {filtered_port_str}{and}{unfiltered_ports_str}"));
+        let message = format_stolen_ports_message(
+            config.feature.network.incoming.http_filter.ports.as_ref(),
+            config.feature.network.incoming.ports.as_ref(),
+        );
+        progress.info(&format!("incoming: traffic will only be stolen from {message}"));
     }
 
     let outgoing_info = match (

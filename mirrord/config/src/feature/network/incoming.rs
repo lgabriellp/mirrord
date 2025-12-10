@@ -542,10 +542,17 @@ impl IncomingConfig {
     /// avoid overriding their config. We also take care to not create conflicts with other
     /// port configs that we have, such as [`IncomingConfig::ignore_ports`]`, and
     /// [`IncomingConfig::ports`].
+    ///
+    /// If ports is set to wildcard `"*"`, we also do nothing since all ports are already covered.
     pub fn add_probe_ports_to_http_filter_ports(
         &mut self,
         probes_ports: &[u16],
     ) -> Option<&PortList> {
+        // When ports is wildcard "*", we don't need to populate - all ports are covered
+        if self.http_filter.ports_is_wildcard() {
+            return self.http_filter.ports.as_ref();
+        }
+
         if self.is_steal() && self.http_filter.is_filter_set() && self.http_filter.ports.is_none() {
             let filtered_ports = probes_ports
                 .iter()
@@ -565,7 +572,9 @@ impl IncomingConfig {
             // Only add something if we have a port to add, otherwise leave it as `None` so
             // we can use the `PortList::default` when initializing things.
             if filtered_ports.is_empty().not() {
-                self.http_filter.ports.replace(filtered_ports.into());
+                self.http_filter
+                    .ports
+                    .replace(PortList::from_ports(filtered_ports));
             }
         }
 
@@ -733,7 +742,10 @@ mod test {
     use rstest::rstest;
 
     use super::IncomingConfig;
-    use crate::feature::network::incoming::{IncomingMode, http_filter::HttpFilterConfig};
+    use crate::feature::network::incoming::{
+        IncomingMode,
+        http_filter::{HttpFilterConfig, PortList},
+    };
 
     #[rstest]
     #[case(
@@ -844,7 +856,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("siemowit".into()),
-                ports: Some(vec![81, 8080].into()),
+                ports: Some(PortList::from_ports([81, 8080])),
                 ..Default::default()
             },
             ..Default::default()
@@ -857,7 +869,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("lestek".into()),
-                ports: Some(vec![82].into()),
+                ports: Some(PortList::from_ports([82])),
                 ..Default::default()
             },
             ..Default::default()
@@ -868,7 +880,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("lestek".into()),
-                ports: Some(vec![82].into()),
+                ports: Some(PortList::from_ports([82])),
                 ..Default::default()
             },
             ..Default::default()
@@ -892,7 +904,7 @@ mod test {
             ports: Some([81].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("siemomysł".into()),
-                ports: Some(vec![80, 8080].into()),
+                ports: Some(PortList::from_ports([80, 8080])),
                 ..Default::default()
             },
             ..Default::default()
@@ -918,7 +930,7 @@ mod test {
             ignore_ports: [81].into(),
             http_filter: HttpFilterConfig {
                 header_filter: Some("otto".into()),
-                ports: Some(vec![8080].into()),
+                ports: Some(PortList::from_ports([8080])),
                 ..Default::default()
             },
             ..Default::default()
@@ -934,13 +946,7 @@ mod test {
     ) {
         config.add_probe_ports_to_http_filter_ports(&[port]);
 
-        // Sort the ports since `HashSet` does not guarantee order.
-        if let Some(http_filter_ports) = config.http_filter.ports.as_mut() {
-            let mut ports_vec: Vec<u16> = http_filter_ports.clone().into();
-            ports_vec.sort();
-            *http_filter_ports = ports_vec.into();
-        }
-
+        // Compare the sets directly since HashSet comparison is order-independent
         assert_eq!(config, expected);
     }
 }

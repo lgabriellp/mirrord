@@ -9,7 +9,7 @@ use std::{
 use futures::StreamExt;
 use mirrord_config::feature::network::incoming::{
     IncomingConfig,
-    http_filter::{BodyFilter, HttpFilterConfig, InnerFilter},
+    http_filter::{BodyFilter, HttpFilterConfig, InnerFilter, PortList},
 };
 use mirrord_intproxy::{
     background_tasks::{BackgroundTasks, TaskError, TaskSender, TaskUpdate},
@@ -936,7 +936,7 @@ pub struct HttpSettings {
     /// The HTTP filter to use.
     pub filter: HttpFilter,
     /// Ports to filter HTTP on.
-    pub ports: HashSet<Port>,
+    pub ports: PortList,
 }
 
 impl IncomingMode {
@@ -962,13 +962,7 @@ impl IncomingMode {
             )
         }
 
-        let ports = config
-            .http_filter
-            .ports
-            .get_or_insert_default()
-            .iter()
-            .copied()
-            .collect();
+        let ports = config.http_filter.ports.get_or_insert_default().clone();
 
         let http_filter_config = &config.http_filter;
 
@@ -1090,25 +1084,19 @@ impl IncomingMode {
         if self.steal {
             let steal_type = match &self.http_settings {
                 None => StealType::All(port),
-                Some(settings) => {
-                    if settings.ports.contains(&port) {
-                        StealType::FilteredHttpEx(port, settings.filter.clone())
-                    } else {
-                        StealType::All(port)
-                    }
+                Some(settings) if settings.ports.contains(&port) => {
+                    StealType::FilteredHttpEx(port, settings.filter.clone())
                 }
+                Some(_) => StealType::All(port),
             };
             PortSubscription::Steal(steal_type)
         } else {
             let mirror_type = match &self.http_settings {
                 None => MirrorType::All(port),
-                Some(settings) => {
-                    if settings.ports.contains(&port) {
-                        MirrorType::FilteredHttp(port, settings.filter.clone())
-                    } else {
-                        MirrorType::All(port)
-                    }
+                Some(settings) if settings.ports.contains(&port) => {
+                    MirrorType::FilteredHttp(port, settings.filter.clone())
                 }
+                Some(_) => MirrorType::All(port),
             };
             PortSubscription::Mirror(mirror_type)
         }
