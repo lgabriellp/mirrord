@@ -549,12 +549,7 @@ impl IncomingConfig {
         probes_ports: &[u16],
     ) -> Option<&PortList> {
         // When ports is wildcard "*", we don't need to populate - all ports are covered
-        if self
-            .http_filter
-            .ports
-            .as_ref()
-            .is_some_and(|p| p.is_all())
-        {
+        if self.http_filter.ports_is_wildcard() {
             return self.http_filter.ports.as_ref();
         }
 
@@ -577,7 +572,9 @@ impl IncomingConfig {
             // Only add something if we have a port to add, otherwise leave it as `None` so
             // we can use the `PortList::default` when initializing things.
             if filtered_ports.is_empty().not() {
-                self.http_filter.ports.replace(filtered_ports.into());
+                self.http_filter
+                    .ports
+                    .replace(PortList::from_ports(filtered_ports));
             }
         }
 
@@ -745,7 +742,10 @@ mod test {
     use rstest::rstest;
 
     use super::IncomingConfig;
-    use crate::feature::network::incoming::{IncomingMode, http_filter::HttpFilterConfig};
+    use crate::feature::network::incoming::{
+        IncomingMode,
+        http_filter::{HttpFilterConfig, PortList},
+    };
 
     #[rstest]
     #[case(
@@ -856,7 +856,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("siemowit".into()),
-                ports: Some(vec![81, 8080].into()),
+                ports: Some(PortList::from_ports([81, 8080])),
                 ..Default::default()
             },
             ..Default::default()
@@ -869,7 +869,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("lestek".into()),
-                ports: Some(vec![82].into()),
+                ports: Some(PortList::from_ports([82])),
                 ..Default::default()
             },
             ..Default::default()
@@ -880,7 +880,7 @@ mod test {
             ports: Some([80].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("lestek".into()),
-                ports: Some(vec![82].into()),
+                ports: Some(PortList::from_ports([82])),
                 ..Default::default()
             },
             ..Default::default()
@@ -904,7 +904,7 @@ mod test {
             ports: Some([81].into()),
             http_filter: HttpFilterConfig {
                 header_filter: Some("siemomysł".into()),
-                ports: Some(vec![80, 8080].into()),
+                ports: Some(PortList::from_ports([80, 8080])),
                 ..Default::default()
             },
             ..Default::default()
@@ -930,7 +930,7 @@ mod test {
             ignore_ports: [81].into(),
             http_filter: HttpFilterConfig {
                 header_filter: Some("otto".into()),
-                ports: Some(vec![8080].into()),
+                ports: Some(PortList::from_ports([8080])),
                 ..Default::default()
             },
             ..Default::default()
